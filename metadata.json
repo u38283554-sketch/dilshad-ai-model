@@ -1,0 +1,6 @@
+{
+  "name": "Dilshad AI Assistant",
+  "description": "A premium, intelligent AI assistant for ideas, writing, research, files, images, and everyday workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
