@@ -47,31 +47,60 @@ export class GeminiProvider implements AIProvider {
 
   public async sendMessage(request: NormalizedChatRequest): Promise<NormalizedChatResponse> {
     const ai = this.getClient();
-    const model = resolveModelName(request.model);
+    const primaryModel = resolveModelName(request.model);
+    const candidateModels = [primaryModel, 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.1-pro-preview'].filter(
+      (m, idx, arr) => arr.indexOf(m) === idx
+    );
 
     const contents = this.buildContents(request);
     const config = this.buildConfig(request);
 
-    const response = await ai.models.generateContent({
-      model,
-      contents,
-      config,
-    });
+    let lastError: any = null;
 
-    const text = response.text || '';
+    for (const model of candidateModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+          config,
+        });
 
-    return {
-      text,
-      provider: 'gemini',
-      model,
-      usage: response.usageMetadata
-        ? {
-            promptTokens: response.usageMetadata.promptTokenCount,
-            completionTokens: response.usageMetadata.candidatesTokenCount,
-            totalTokens: response.usageMetadata.totalTokenCount,
-          }
-        : undefined,
-    };
+        const text = response.text || '';
+
+        return {
+          text,
+          provider: 'gemini',
+          model,
+          usage: response.usageMetadata
+            ? {
+                promptTokens: response.usageMetadata.promptTokenCount,
+                completionTokens: response.usageMetadata.candidatesTokenCount,
+                totalTokens: response.usageMetadata.totalTokenCount,
+              }
+            : undefined,
+        };
+      } catch (err: any) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        // If it's a rate limit or temporary server overload, try fallback candidate model
+        if (
+          msg.includes('429') ||
+          msg.includes('quota') ||
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('503') ||
+          msg.includes('500') ||
+          msg.includes('404') ||
+          msg.includes('UNAVAILABLE')
+        ) {
+          console.warn(`[GeminiProvider] Model ${model} failed (${msg}). Trying fallback...`);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw lastError;
   }
 
   public async streamMessage(
@@ -79,48 +108,79 @@ export class GeminiProvider implements AIProvider {
     onChunk: (chunk: string) => void
   ): Promise<NormalizedChatResponse> {
     const ai = this.getClient();
-    const model = resolveModelName(request.model);
+    const primaryModel = resolveModelName(request.model);
+    const candidateModels = [primaryModel, 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.1-pro-preview'].filter(
+      (m, idx, arr) => arr.indexOf(m) === idx
+    );
 
     const contents = this.buildContents(request);
     const config = this.buildConfig(request);
 
-    const stream = await ai.models.generateContentStream({
-      model,
-      contents,
-      config,
-    });
+    let lastError: any = null;
 
-    let fullText = '';
-    let usageMetadata: any = undefined;
+    for (const model of candidateModels) {
+      try {
+        const stream = await ai.models.generateContentStream({
+          model,
+          contents,
+          config,
+        });
 
-    for await (const chunk of stream) {
-      const chunkText = chunk.text || '';
-      if (chunkText) {
-        fullText += chunkText;
-        onChunk(chunkText);
-      }
-      if (chunk.usageMetadata) {
-        usageMetadata = chunk.usageMetadata;
+        let fullText = '';
+        let usageMetadata: any = undefined;
+
+        for await (const chunk of stream) {
+          const chunkText = chunk.text || '';
+          if (chunkText) {
+            fullText += chunkText;
+            onChunk(chunkText);
+          }
+          if (chunk.usageMetadata) {
+            usageMetadata = chunk.usageMetadata;
+          }
+        }
+
+        return {
+          text: fullText,
+          provider: 'gemini',
+          model,
+          usage: usageMetadata
+            ? {
+                promptTokens: usageMetadata.promptTokenCount,
+                completionTokens: usageMetadata.candidatesTokenCount,
+                totalTokens: usageMetadata.totalTokenCount,
+              }
+            : undefined,
+        };
+      } catch (err: any) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          msg.includes('429') ||
+          msg.includes('quota') ||
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('503') ||
+          msg.includes('500') ||
+          msg.includes('404') ||
+          msg.includes('UNAVAILABLE')
+        ) {
+          console.warn(`[GeminiProvider Stream] Model ${model} failed (${msg}). Trying fallback...`);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        throw err;
       }
     }
 
-    return {
-      text: fullText,
-      provider: 'gemini',
-      model,
-      usage: usageMetadata
-        ? {
-            promptTokens: usageMetadata.promptTokenCount,
-            completionTokens: usageMetadata.candidatesTokenCount,
-            totalTokens: usageMetadata.totalTokenCount,
-          }
-        : undefined,
-    };
+    throw lastError;
   }
 
   public async analyzeImage(request: AnalyzeImageRequest): Promise<NormalizedChatResponse> {
     const ai = this.getClient();
-    const model = resolveModelName(request.model);
+    const primaryModel = resolveModelName(request.model);
+    const candidateModels = [primaryModel, 'gemini-3.6-flash', 'gemini-3.7-flash'].filter(
+      (m, idx, arr) => arr.indexOf(m) === idx
+    );
 
     let cleanData = request.image.data;
     let mimeType = request.image.mimeType || 'image/png';
@@ -133,61 +193,110 @@ export class GeminiProvider implements AIProvider {
       }
     }
 
-    const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType,
-              data: cleanData,
-            },
+    let lastError: any = null;
+    for (const model of candidateModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType,
+                  data: cleanData,
+                },
+              },
+              {
+                text: request.prompt || 'Please analyze this image in detail.',
+              },
+            ],
           },
-          {
-            text: request.prompt || 'Please analyze this image in detail.',
+          config: {
+            systemInstruction: DEFAULT_DILSHAD_SYSTEM_PROMPT,
           },
-        ],
-      },
-      config: {
-        systemInstruction: DEFAULT_DILSHAD_SYSTEM_PROMPT,
-      },
-    });
+        });
 
-    return {
-      text: response.text || '',
-      provider: 'gemini',
-      model,
-    };
+        return {
+          text: response.text || '',
+          provider: 'gemini',
+          model,
+        };
+      } catch (err: any) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          msg.includes('429') ||
+          msg.includes('quota') ||
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('503') ||
+          msg.includes('500') ||
+          msg.includes('404') ||
+          msg.includes('UNAVAILABLE')
+        ) {
+          console.warn(`[GeminiProvider Image] Model ${model} failed (${msg}). Trying fallback...`);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
   }
 
   public async analyzeFile(request: AnalyzeFileRequest): Promise<NormalizedChatResponse> {
     const ai = this.getClient();
-    const model = resolveModelName(request.model);
+    const primaryModel = resolveModelName(request.model);
+    const candidateModels = [primaryModel, 'gemini-3.6-flash', 'gemini-3.7-flash'].filter(
+      (m, idx, arr) => arr.indexOf(m) === idx
+    );
 
     const promptText = `Please analyze the attached document (${request.file.name}):\n\n${request.file.data}\n\nUser Request: ${request.prompt || 'Summarize and extract key insights.'}`;
 
-    const response = await ai.models.generateContent({
-      model,
-      contents: promptText,
-      config: {
-        systemInstruction: DEFAULT_DILSHAD_SYSTEM_PROMPT,
-      },
-    });
+    let lastError: any = null;
+    for (const model of candidateModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: promptText,
+          config: {
+            systemInstruction: DEFAULT_DILSHAD_SYSTEM_PROMPT,
+          },
+        });
 
-    return {
-      text: response.text || '',
-      provider: 'gemini',
-      model,
-    };
+        return {
+          text: response.text || '',
+          provider: 'gemini',
+          model,
+        };
+      } catch (err: any) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          msg.includes('429') ||
+          msg.includes('quota') ||
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('503') ||
+          msg.includes('500') ||
+          msg.includes('404') ||
+          msg.includes('UNAVAILABLE')
+        ) {
+          console.warn(`[GeminiProvider File] Model ${model} failed (${msg}). Trying fallback...`);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
   }
 
   private buildContents(request: NormalizedChatRequest) {
-    const contents: any[] = [];
+    const rawTurns: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
 
     for (const msg of request.messages) {
       if (msg.role === 'system') continue;
 
-      const role = msg.role === 'user' ? 'user' : 'model';
+      const role: 'user' | 'model' = msg.role === 'user' ? 'user' : 'model';
       const parts: any[] = [];
 
       // Extract image attachments
@@ -211,18 +320,42 @@ export class GeminiProvider implements AIProvider {
         });
       }
 
-      contents.push({ role, parts });
+      if (parts.length > 0) {
+        rawTurns.push({ role, parts });
+      }
+    }
+
+    // Merge consecutive turns with the same role into a single consolidated turn
+    const consolidatedTurns: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
+    for (const turn of rawTurns) {
+      if (consolidatedTurns.length === 0) {
+        // First turn must be user in Gemini multiturn
+        if (turn.role === 'model') {
+          consolidatedTurns.push({
+            role: 'user',
+            parts: [{ text: 'Hello' }],
+          });
+        }
+        consolidatedTurns.push(turn);
+      } else {
+        const lastTurn = consolidatedTurns[consolidatedTurns.length - 1];
+        if (lastTurn.role === turn.role) {
+          lastTurn.parts.push(...turn.parts);
+        } else {
+          consolidatedTurns.push(turn);
+        }
+      }
     }
 
     // Ensure we have at least one user turn
-    if (contents.length === 0) {
-      contents.push({
+    if (consolidatedTurns.length === 0) {
+      consolidatedTurns.push({
         role: 'user',
         parts: [{ text: 'Hello' }],
       });
     }
 
-    return contents;
+    return consolidatedTurns;
   }
 
   private buildConfig(request: NormalizedChatRequest) {

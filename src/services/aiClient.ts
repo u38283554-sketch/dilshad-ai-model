@@ -78,6 +78,8 @@ export class AIClient {
         let resultMetadata: Partial<SendMessageResult> = {};
         let buffer = '';
 
+        let streamError: string | null = null;
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -110,7 +112,7 @@ export class AIClient {
                       : undefined,
                   };
                 } else if (parsed.type === 'error') {
-                  throw new Error(parsed.error || 'AI generation encountered an error.');
+                  streamError = parsed.error || 'AI generation encountered an error.';
                 }
               } catch (e) {
                 if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
@@ -121,14 +123,28 @@ export class AIClient {
           }
         }
 
+        if (streamError) {
+          throw new Error(streamError);
+        }
+
         return {
           text: fullText || 'No response generated.',
           provider: resultMetadata.provider || 'gemini',
           model: resultMetadata.model || modelId || 'gemini-3.7-flash',
           tokens: resultMetadata.tokens,
         };
-      } catch (streamError) {
-        console.warn('Streaming error, falling back to standard JSON generation:', streamError);
+      } catch (streamErr) {
+        const errorMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        // If the error was an authentication or specific known error, rethrow directly
+        if (
+          errorMsg.includes('API Key') ||
+          errorMsg.includes('GEMINI_API_KEY') ||
+          errorMsg.includes('Unauthorized') ||
+          errorMsg.includes('401')
+        ) {
+          throw streamErr;
+        }
+        console.warn('Streaming error, falling back to standard JSON generation:', errorMsg);
         // Fallback to standard non-streaming post below
       }
     }
