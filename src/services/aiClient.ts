@@ -1,5 +1,19 @@
 import { Attachment, Message } from '../types';
 
+async function readJsonResponse(response: Response): Promise<Record<string, any>> {
+  const responseText = await response.text();
+
+  if (!responseText.trim()) {
+    throw new Error(`AI service returned an empty response (HTTP ${response.status}).`);
+  }
+
+  try {
+    return JSON.parse(responseText) as Record<string, any>;
+  } catch {
+    throw new Error(`AI service returned an invalid response (HTTP ${response.status}).`);
+  }
+}
+
 export interface SendMessageOptions {
   messages: Message[];
   modelId?: string;
@@ -64,8 +78,15 @@ export class AIClient {
         });
 
         if (!response.ok) {
-          const errorJson = await response.json().catch(() => ({}));
+          const errorJson = await readJsonResponse(response).catch(
+            (): Record<string, any> => ({})
+          );
           throw new Error(errorJson.error || `Server responded with HTTP ${response.status}`);
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('text/event-stream')) {
+          throw new Error('AI streaming endpoint returned an unexpected response type.');
         }
 
         if (!response.body) {
@@ -127,6 +148,10 @@ export class AIClient {
           throw new Error(streamError);
         }
 
+        if (!fullText && !resultMetadata.provider) {
+          throw new Error('AI stream ended before a response was generated.');
+        }
+
         return {
           text: fullText || 'No response generated.',
           provider: resultMetadata.provider || 'gemini',
@@ -158,7 +183,7 @@ export class AIClient {
       body: JSON.stringify(payload),
     });
 
-    const data = await res.json();
+    const data = await readJsonResponse(res);
 
     if (!res.ok || !data.ok) {
       throw new Error(data.error || `Server responded with HTTP ${res.status}`);

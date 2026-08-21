@@ -16,7 +16,7 @@ export class GeminiProvider implements AIProvider {
   public readonly name = 'gemini';
 
   private getClient(): GoogleGenAI {
-    let apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    let apiKey = (process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '').trim();
     if (
       (apiKey.startsWith('"') && apiKey.endsWith('"')) ||
       (apiKey.startsWith("'") && apiKey.endsWith("'"))
@@ -35,14 +35,18 @@ export class GeminiProvider implements AIProvider {
       'null',
     ];
 
-    if (!apiKey || placeholderPatterns.includes(apiKey.toLowerCase())) {
-      throw new AppError(
-        'GEMINI_API_KEY is not configured or is missing. Please set your Gemini API Key in the Settings > Secrets menu.',
-        401
-      );
+    if (apiKey && !placeholderPatterns.includes(apiKey.toLowerCase())) {
+      return new GoogleGenAI({ apiKey });
     }
 
-    return new GoogleGenAI({ apiKey });
+    if (process.env.NETLIFY_AI_GATEWAY_KEY || process.env.GOOGLE_GEMINI_BASE_URL) {
+      return new GoogleGenAI({});
+    }
+
+    throw new AppError(
+      'Gemini is not configured. Set GEMINI_API_KEY in the Netlify environment variables or enable Netlify AI Gateway.',
+      401
+    );
   }
 
   public async sendMessage(request: NormalizedChatRequest): Promise<NormalizedChatResponse> {
